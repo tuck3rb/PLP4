@@ -1,0 +1,21 @@
+name:                datetime
+version:             1.0
+license:             BSD3
+author:              Tucker Brock
+maintainer:          brocktk@hendrix.edu
+category:            Utility
+build-type:          Simple
+cabal-version:       >=1.10
+
+executable datetime
+  main-is:             DateTimeREPL.hs
+  other-modules:       DateTime, Parsing2
+  other-extensions:    GADTs
+  build-depends:       base >=4.10 && <4.22
+                     , haskeline >=0.7 && <0.9
+                     , parsec
+                     , containers
+                     , time
+                     , tzdata
+                     , tz
+  default-language:    Haskell2010

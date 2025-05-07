@@ -1,0 +1,8 @@
+To build and test the project:
+
+1. Enter the PLP4 directory in the terminal
+2. Execute `stack build`
+3. Execute `stack run`
+4. Follow instructions and use `:help` for
+   more information.
+5. To exit the REPL, type `:quit`
