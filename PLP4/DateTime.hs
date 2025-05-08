@@ -32,8 +32,8 @@ data Expr where
     NowIn   :: String -> Expr  -- timezone
     Add     :: Expr -> Duration -> Expr
     Sub     :: Expr -> Duration -> Expr
-    ShowOffset :: String -> Expr
-    Difference :: String -> String -> Expr
+    ShowOffset :: String -> Expr  -- UTC offset
+    Difference :: String -> String -> Expr  -- Difference between two zones
     deriving (Show, Eq) 
 
 -- Description text shown at startup
