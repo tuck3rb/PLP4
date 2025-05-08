@@ -7,8 +7,8 @@ module DateTime where
 
 -- IMPORTS
 import Parsing2
-import Data.Time (getCurrentTime, parseTimeM, defaultTimeLocale,
-                  UTCTime, addUTCTime, NominalDiffTime, LocalTime)
+import Data.Time (getCurrentTime, parseTimeM, defaultTimeLocale, UTCTime, 
+                  addUTCTime, NominalDiffTime, LocalTime, timeZoneMinutes)
 import Data.Time.Zones
 import Control.Exception (catch, IOException)
 
@@ -32,6 +32,8 @@ data Expr where
     NowIn   :: String -> Expr  -- timezone
     Add     :: Expr -> Duration -> Expr
     Sub     :: Expr -> Duration -> Expr
+    ShowOffset :: String -> Expr
+    Difference :: String -> String -> Expr
     deriving (Show, Eq) 
 
 -- Description text shown at startup
@@ -40,13 +42,15 @@ description = unlines
     [ "Welcome to the timezone machine!"
     , "Type an expression if you're familiar with this tool."
     , "Try `:help` (for features), `:zones` (for options)"
-    , "and type `quit` when you're ready to exit."
+    , "and type `:quit` when you're ready to exit."
     ]
 
 -- Help message to clarify features
 helpMsg :: String
 helpMsg = unlines
     ["The timezone machine supports:"
+    , "• Requesting UTC offset for a time zone"
+    , "• Finding difference between two time zones"
     , "• Converting from one time zone to another"
     , "• Getting the current time in any time zone"
     , "• Adding or subtracting to expressions using:"
@@ -56,6 +60,14 @@ helpMsg = unlines
     , ""
     , "FORMATTING"
     , "-----------"
+    , "• UTC offsets just require you to name the time zone:"
+    , ""
+    , "  `\"time zone\"`"
+    , ""
+    , "• Differences between time zones require the below syntax:"
+    , ""
+    , "  `difference \"time zone 1\" \"time zone 2\"`"
+    , ""
     , "• Conversions must follow the below syntax:"
     , ""
     , "  `convert \"yyyy-mm-dd hh:mm\" from \"time zone 1\" to \"time zone 2\"`"
@@ -73,6 +85,8 @@ helpMsg = unlines
     , "• convert \"2025-04-22 15:30\" from \"US/Central\" to \"Asia/Tokyo\""
     , "• now in \"UTC\""
     , "• now in \"US/Central\" + 20 minutes"
+    , "• \"Europe/London\""
+    , "• difference \"GMT\" \"Zulu\""
     ]
 
 zonesList :: String
@@ -120,7 +134,7 @@ parseExpr :: Parser Expr
 parseExpr = parseExprAtom >>= parseAddSub
 
 parseExprAtom :: Parser Expr
-parseExprAtom = parseConvert <|> parseNowIn
+parseExprAtom = parseConvert <|> parseNowIn <|> parseDifference <|> parseShowOffset
 
 -- For Addition and Subtraction of time (ex: +3 hours)
 parseAddSub :: Expr -> Parser Expr
@@ -166,6 +180,20 @@ parseUnit =
     <|> (reserved "minutes" >> return Minutes)
     <|> (reserved "seconds" >> return Seconds)
 
+parseShowOffset :: Parser Expr
+parseShowOffset =
+    whiteSpace >>
+    parseStrLit >>= \zone ->
+    return (ShowOffset zone)
+
+parseDifference :: Parser Expr
+parseDifference =
+    whiteSpace >>
+    reserved "difference" >>
+    parseStrLit >>= \zone1 ->
+    parseStrLit >>= \zone2 ->
+    return (Difference zone1 zone2)
+
 -- EVALUATOR
 eval :: Expr -> IO String
 eval expr = eval' expr `catch` handleBadTZ
@@ -178,6 +206,8 @@ eval' (Sub e dur) =
     let durNeg = case dur of
                     Duration n u -> Duration (negate n) u
     in evalTimeOp e durNeg  -- negating dur to allow subtraction in evalTimeOp
+eval' (ShowOffset zone)            = evalShowOffset zone
+eval' (Difference z1 z2)           = evalDifference z1 z2
 
 evalConvert :: String -> String -> String -> IO String
 evalConvert dt fromZone toZone =
@@ -212,6 +242,37 @@ evalTimeOp e dur =
                 Nothing ->
                     return (show newUTCTime)
 
+evalShowOffset :: String -> IO String
+evalShowOffset zone =
+    getCurrentTime >>= \utcNow ->
+    loadSystemTZ zone >>= \tz ->
+    let offsetMin = timeZoneMinutes (timeZoneForUTCTime tz utcNow)
+        h = offsetMin `div` 60
+        m = abs (offsetMin `mod` 60)
+        sign = if offsetMin >= 0 then "+" else "-"
+    in return ("UTC" ++ sign ++ show (abs h) ++ ":" ++ (if m < 10 then "0" else "") ++ show m)
+
+evalDifference :: String -> String -> IO String
+evalDifference z1 z2 =
+    getCurrentTime >>= \utcNow ->
+    loadSystemTZ z1 >>= \tz1 ->
+    loadSystemTZ z2 >>= \tz2 ->
+    let offset1 = timeZoneMinutes (timeZoneForUTCTime tz1 utcNow)
+        offset2 = timeZoneMinutes (timeZoneForUTCTime tz2 utcNow)
+        diffMin = abs (offset1 - offset2)
+        h = diffMin `div` 60
+        m = diffMin `mod` 60
+    in return (z1 ++ ": UTC" ++ formatOffset offset1
+        ++ "\n" ++ z2 ++ ": UTC" ++ formatOffset offset2
+        ++ "\nDifference: " ++ show h ++ " hours " ++ show m ++ " minutes")
+
+formatOffset :: Int -> String
+formatOffset offsetMin =
+    let h = offsetMin `div` 60
+        m = abs (offsetMin `mod` 60)
+        sign = if offsetMin >= 0 then "+" else "-"
+    in sign ++ show (abs h) ++ ":" ++ (if m < 10 then "0" else "") ++ show m
+
 -- Helper function for evalTimeOp to convert Duration to DiffTime
 durationToDiffTime :: Duration -> NominalDiffTime
 durationToDiffTime (Duration n unit) =
@@ -245,6 +306,10 @@ evalToUTC (Sub e dur) =
         Right baseTime ->
             let offset = durationToDiffTime dur
             in return (Right (addUTCTime (negate offset) baseTime))
+evalToUTC (ShowOffset _)
+    = return (Left "Evaluation error: Cannot convert offset query to a UTC time")
+evalToUTC (Difference _ _)
+    = return (Left "Evaluation error: Cannot convert difference query to a UTC time")
 
 -- Helper function for finding time zone for nested adds or subs
 findTimeZone :: Expr -> Maybe String
@@ -252,6 +317,8 @@ findTimeZone (Convert _ _ toZone) = Just toZone
 findTimeZone (NowIn zone)         = Just zone
 findTimeZone (Add e _)            = findTimeZone e
 findTimeZone (Sub e _)            = findTimeZone e
+findTimeZone (ShowOffset _)       = Nothing
+findTimeZone (Difference _ _)     = Nothing
 
 -- Safer functions to allow more assistive error handling
 safeParseTime :: String -> Either String LocalTime
